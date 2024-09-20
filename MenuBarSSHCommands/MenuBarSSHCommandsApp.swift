@@ -14,11 +14,12 @@ class ButtonContainerStore: ObservableObject {
     @Published var buttonContainer: [ButtonContainer] = []
     let jsonFileName = "MenuBarSSHCommandsData"
     var terminal: String = "Terminal"
-    
+    var userFileURL: URL?
     private var fileMonitor: FileMonitor?
     
     init() {
         do {
+            setupFileURLs()
             loadButtonContainer()
             startMonitoringFileChanges()
             try SMAppService.mainApp.register()
@@ -26,10 +27,27 @@ class ButtonContainerStore: ObservableObject {
             print("Error \(error)")
         }
     }
+    
+    private func setupFileURLs() {
+        let fileManager = FileManager.default
+        let userDirectory = fileManager.homeDirectoryForCurrentUser
+        userFileURL = userDirectory.appendingPathComponent(".mbsc.json")
+        
+        let bundleFileURL = Bundle.main.url(forResource: jsonFileName, withExtension: "json")
+        guard let bundleFileURL = bundleFileURL else { return }
+
+        if !fileManager.fileExists(atPath: userFileURL!.path) {
+            do {
+                try fileManager.copyItem(at: bundleFileURL, to: userFileURL!)
+            } catch {
+                print("Error copying file: \(error)")
+            }
+        }
+    }
 
     func loadButtonContainer() {
-        guard let url = Bundle.main.url(forResource: jsonFileName, withExtension: "json"),
-              let data = try? Data(contentsOf: url) else {
+        guard let fileURL = userFileURL,
+              let data = try? Data(contentsOf: fileURL) else {
             return
         }
 
@@ -46,14 +64,14 @@ class ButtonContainerStore: ObservableObject {
     }
     
     private func startMonitoringFileChanges() {
-            let fileURL = Bundle.main.url(forResource: jsonFileName, withExtension: "json")
-            fileMonitor = FileMonitor(fileURL: fileURL)
-            fileMonitor?.startMonitoring { [weak self] in
-                DispatchQueue.main.async {
-                    self?.loadButtonContainer()
-                }
+        guard let fileURL = userFileURL else { return }
+        fileMonitor = FileMonitor(fileURL: fileURL)
+        fileMonitor?.startMonitoring { [weak self] in
+            DispatchQueue.main.async {
+                self?.loadButtonContainer()
             }
         }
+    }
 }
 
 class FileMonitor {
@@ -124,9 +142,9 @@ struct MenuBarSSHCommandsApp: App {
                 }
             }
             Divider()
-            Button("Edit", action: openJSONFile)
+            Button(NSLocalizedString("Edit", comment: "Edit Commands"), action: openJSONFile)
             //Button("Reload", action: buttonContainerStore.loadButtonContainer)
-            Button("Quit", action: {
+            Button(NSLocalizedString("Quit", comment: "Quit Aplication"), action: {
                NSApplication.shared.terminate(nil)
            })
         }
@@ -134,8 +152,8 @@ struct MenuBarSSHCommandsApp: App {
         
             let image: NSImage = {
                 let ratio = $0.size.height / $0.size.width
-                $0.size.height = 18
-                $0.size.width = 18 / ratio
+                $0.size.height = 16
+                $0.size.width = 16 / ratio
                 return $0
             }(NSImage(named: "Icon")!)
         
@@ -172,23 +190,22 @@ struct MenuBarSSHCommandsApp: App {
             """
         } else {
             source = """
-            if application "\(terminal)" is not running then
-                tell application "\(terminal)"
+            tell application "\(terminal)"
+                if not (running) then
                     activate
-                    do script "\(command)"
-                end tell
-            else
-                tell application "\(terminal)"
-                    if (count windows) > 0 then
-                        tell front window
-                            do script "\(command)"
-                        end tell
-                    else
-                        do script "\(command)"
-                    end if
+                    delay 0.3
+                    do script "\(command)" in window 1
+                else
                     activate
-                end tell
-            end if
+                    tell application "System Events"
+                        keystroke "t" using {command down}
+                    end tell
+                    delay 0.3
+                    tell front window
+                        do script "\(command)" in selected tab
+                    end tell
+                end if
+            end tell
             """
         }
 
@@ -211,11 +228,11 @@ struct MenuBarSSHCommandsApp: App {
 
     
     private func openJSONFile() {
-        guard let url = Bundle.main.url(forResource: buttonContainerStore.jsonFileName, withExtension: "json") else {
+        guard let fileUrl = buttonContainerStore.userFileURL else {
             return
         }
         
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(fileUrl)
     }
 
 }
@@ -227,7 +244,7 @@ struct Section: Identifiable, Equatable, Decodable {
 }
 
 struct ButtonAction: Identifiable, Equatable, Decodable {
-    let id = UUID()
+    var id = UUID()
     let name: String
     let command: String
 }
